@@ -1,32 +1,47 @@
-from flask import Flask, render_template_string, request, jsonify, send_file
+from flask import Flask, render_template_string, request, jsonify, send_file, session, redirect, url_for
 import sqlite3
 from datetime import datetime
 import json
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 import os
+from functools import wraps
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'zen-protez-lab-2025-secret-key')
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'zen-protez-lab-2025-secret-key-super-secure')
 
-# Veritabanı yolu - Heroku için
+# Veritabanı yolu
 DATABASE = os.environ.get('DATABASE_URL', 'zen_protez_lab.db')
 if DATABASE.startswith('postgres://'):
     DATABASE = DATABASE.replace('postgres://', 'postgresql://', 1)
 
+# Varsayılan kullanıcı bilgileri
+DEFAULT_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
+DEFAULT_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'zen2025')
+
 def get_db():
     if DATABASE.endswith('.db'):
-        # SQLite
         conn = sqlite3.connect(DATABASE)
         conn.row_factory = sqlite3.Row
         return conn
     else:
-        # PostgreSQL için hazırlık (gelecekte)
         return sqlite3.connect('zen_protez_lab.db')
 
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
+    
+    # Kullanıcılar tablosu
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        role TEXT DEFAULT 'user'
+    )''')
+    
+    # Varsayılan admin kullanıcısı
+    cursor.execute('INSERT OR IGNORE INTO users (username, password, role) VALUES (?, ?, ?)',
+                  (DEFAULT_USERNAME, DEFAULT_PASSWORD, 'admin'))
     
     cursor.execute('''CREATE TABLE IF NOT EXISTS dentists (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,11 +105,180 @@ def init_db():
     conn.commit()
     conn.close()
 
-# İlk başlatmada veritabanını oluştur
 try:
     init_db()
 except:
     pass
+
+# Login kontrolü
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'logged_in' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+LOGIN_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Giriş - Özel Zen Protez Laboratuvarı</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .login-container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+            max-width: 400px;
+            width: 100%;
+        }
+        
+        .login-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .login-header h1 {
+            font-size: 24px;
+            color: #366092;
+            margin-bottom: 10px;
+        }
+        
+        .login-header p {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .logo {
+            font-size: 60px;
+            margin-bottom: 20px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border 0.3s;
+        }
+        
+        .form-group input:focus {
+            outline: none;
+            border-color: #366092;
+        }
+        
+        .btn-login {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #366092 0%, #2a4a6f 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .btn-login:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(54, 96, 146, 0.4);
+        }
+        
+        .alert {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .login-info {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            font-size: 13px;
+            color: #666;
+        }
+        
+        .login-info strong {
+            color: #366092;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <div class="logo">🦷</div>
+            <h1>Özel Zen Protez Laboratuvarı</h1>
+            <p>Güvenli Giriş</p>
+        </div>
+        
+        {% if error %}
+        <div class="alert alert-error">{{ error }}</div>
+        {% endif %}
+        
+        <form method="POST">
+            <div class="form-group">
+                <label>Kullanıcı Adı</label>
+                <input type="text" name="username" required autofocus>
+            </div>
+            
+            <div class="form-group">
+                <label>Şifre</label>
+                <input type="password" name="password" required>
+            </div>
+            
+            <button type="submit" class="btn-login">🔐 Giriş Yap</button>
+        </form>
+        
+        <div class="login-info">
+            <strong>💡 İlk Giriş Bilgileri:</strong><br>
+            Kullanıcı Adı: <strong>admin</strong><br>
+            Şifre: <strong>zen2025</strong><br>
+            <small>(Giriş yaptıktan sonra değiştirebilirsiniz)</small>
+        </div>
+    </div>
+</body>
+</html>
+'''
 
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -130,18 +314,44 @@ HTML_TEMPLATE = '''
             background: linear-gradient(135deg, #366092 0%, #2a4a6f 100%);
             color: white;
             padding: 20px;
-            text-align: center;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
         
-        .header h1 {
+        .header-left h1 {
             font-size: 22px;
             font-weight: bold;
             margin-bottom: 8px;
         }
         
-        .header p {
+        .header-left p {
             font-size: 12px;
             opacity: 0.9;
+        }
+        
+        .header-right {
+            text-align: right;
+        }
+        
+        .user-info {
+            font-size: 13px;
+            margin-bottom: 8px;
+        }
+        
+        .btn-logout {
+            padding: 8px 16px;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 1px solid white;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .btn-logout:hover {
+            background: rgba(255,255,255,0.3);
         }
         
         .tabs {
@@ -412,6 +622,14 @@ HTML_TEMPLATE = '''
         }
         
         @media (max-width: 768px) {
+            .header {
+                flex-direction: column;
+                text-align: center;
+            }
+            .header-right {
+                margin-top: 15px;
+                text-align: center;
+            }
             .header h1 {
                 font-size: 18px;
             }
@@ -436,8 +654,14 @@ HTML_TEMPLATE = '''
 <body>
     <div class="container">
         <div class="header">
-            <h1>🦷 ÖZEL ZEN HAREKETLİ DİŞ PROTEZ LABORATUVARI</h1>
-            <p>Profesyonel Laboratuvar Yönetim Sistemi - Online Versiyon</p>
+            <div class="header-left">
+                <h1>🦷 ÖZEL ZEN HAREKETLİ DİŞ PROTEZ LABORATUVARI</h1>
+                <p>Profesyonel Laboratuvar Yönetim Sistemi - Güvenli Erişim</p>
+            </div>
+            <div class="header-right">
+                <div class="user-info">👤 {{ username }}</div>
+                <button class="btn-logout" onclick="window.location.href='/logout'">🚪 Çıkış</button>
+            </div>
         </div>
         
         <div class="tabs">
@@ -450,7 +674,7 @@ HTML_TEMPLATE = '''
             <button class="tab" onclick="showTab('reports')">📈 Rapor</button>
         </div>
         
-        <!-- KONTROL PANELİ -->
+        <!-- Önceki HTML içeriği aynı kalacak, sadece header değişti -->
         <div id="dashboard" class="tab-content active">
             <h2 class="section-title">Genel Durum</h2>
             <div class="stats">
@@ -474,7 +698,7 @@ HTML_TEMPLATE = '''
             <button class="btn btn-primary" onclick="loadDashboard()">🔄 Verileri Yenile</button>
         </div>
         
-        <!-- YENİ İŞ -->
+        <!-- Diğer sekmeler önceki haliyle aynı -->
         <div id="newjob" class="tab-content">
             <h2 class="section-title">Yeni İş Kaydı</h2>
             <div id="jobAlert"></div>
@@ -546,7 +770,6 @@ HTML_TEMPLATE = '''
             </button>
         </div>
         
-        <!-- İŞLER LİSTESİ -->
         <div id="jobs" class="tab-content">
             <h2 class="section-title">Tüm İşler</h2>
             <button class="btn btn-primary" onclick="loadJobs()">🔄 Yenile</button>
@@ -570,7 +793,6 @@ HTML_TEMPLATE = '''
             </div>
         </div>
         
-        <!-- DİŞ HEKİMLERİ -->
         <div id="dentists" class="tab-content">
             <h2 class="section-title">Diş Hekimi Ekle</h2>
             <div id="dentistAlert"></div>
@@ -612,7 +834,6 @@ HTML_TEMPLATE = '''
             </div>
         </div>
         
-        <!-- FİYAT LİSTESİ -->
         <div id="prices" class="tab-content">
             <h2 class="section-title">Fiyat Listesi</h2>
             <p style="color: #666; margin-bottom: 15px; font-size: 13px;">Fiyat değiştirmek için tabloda tıklayın</p>
@@ -630,7 +851,6 @@ HTML_TEMPLATE = '''
             </div>
         </div>
         
-        <!-- GİDERLER -->
         <div id="expenses" class="tab-content">
             <h2 class="section-title">Yeni Gider Ekle</h2>
             <div id="expenseAlert"></div>
@@ -683,7 +903,6 @@ HTML_TEMPLATE = '''
             </div>
         </div>
         
-        <!-- RAPORLAR -->
         <div id="reports" class="tab-content">
             <h2 class="section-title">Raporlar ve Excel Aktarımı</h2>
             <div style="text-align: center; padding: 30px;">
@@ -983,12 +1202,40 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
-# Flask routes (aynı kalıyor...)
-@app.route('/')
-def index():
-    return render_template_string(HTML_TEMPLATE)
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM users WHERE username = ? AND password = ?', (username, password))
+        user = cursor.fetchone()
+        conn.close()
+        
+        if user:
+            session['logged_in'] = True
+            session['username'] = username
+            return redirect(url_for('index'))
+        else:
+            return render_template_string(LOGIN_TEMPLATE, error='Kullanıcı adı veya şifre hatalı!')
+    
+    return render_template_string(LOGIN_TEMPLATE)
 
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+@app.route('/')
+@login_required
+def index():
+    return render_template_string(HTML_TEMPLATE, username=session.get('username', 'Kullanıcı'))
+
+# API routes (önceki gibi ama login_required eklenmiş)
 @app.route('/api/dashboard')
+@login_required
 def dashboard_stats():
     conn = get_db()
     cursor = conn.cursor()
@@ -1007,6 +1254,7 @@ def dashboard_stats():
     })
 
 @app.route('/api/dentists', methods=['GET', 'POST'])
+@login_required
 def dentists():
     conn = get_db()
     cursor = conn.cursor()
@@ -1026,6 +1274,7 @@ def dentists():
     return jsonify(dentists)
 
 @app.route('/api/prices', methods=['GET'])
+@login_required
 def get_prices():
     conn = get_db()
     cursor = conn.cursor()
@@ -1035,6 +1284,7 @@ def get_prices():
     return jsonify(prices)
 
 @app.route('/api/prices/<int:price_id>', methods=['PUT'])
+@login_required
 def update_price(price_id):
     data = request.json
     conn = get_db()
@@ -1045,6 +1295,7 @@ def update_price(price_id):
     return jsonify({'success': True})
 
 @app.route('/api/jobs', methods=['GET', 'POST'])
+@login_required
 def jobs():
     conn = get_db()
     cursor = conn.cursor()
@@ -1072,6 +1323,7 @@ def jobs():
     return jsonify(jobs)
 
 @app.route('/api/expenses', methods=['GET', 'POST'])
+@login_required
 def expenses():
     conn = get_db()
     cursor = conn.cursor()
@@ -1091,6 +1343,7 @@ def expenses():
     return jsonify(expenses)
 
 @app.route('/export/excel')
+@login_required
 def export_excel():
     wb = Workbook()
     ws_jobs = wb.active
